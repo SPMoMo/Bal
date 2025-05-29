@@ -1,0 +1,535 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Playlist Collaborative Unique</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        /* Styles de base pour la police */
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-purple-400 via-pink-500 to-red-500 text-gray-800 p-4 sm:p-8 flex flex-col items-center min-h-screen">
+    <div id="app-root" class="w-full max-w-4xl">
+        </div>
+
+    <script type="module">
+        // Import des modules Firebase depuis les CDN
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, updateDoc, onSnapshot, arrayUnion, arrayRemove } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Variables globales pour l'état de Firebase et de l'application
+        let db; // Instance de Firestore
+        let auth; // Instance d'authentification Firebase
+        let userId = null; // ID de l'utilisateur actuel
+        let isAuthReady = false; // Indique si l'authentification est prête
+        let currentPlaylist = null; // Données de la playlist actuelle
+        let currentMessage = ''; // Message à afficher à l'utilisateur (renommé pour éviter conflit)
+        let currentAppId = 'default-app-id-for-github'; // ID d'application par défaut pour GitHub Pages
+
+        // ID fixe de la playlist pour cette application unique
+        const PLAYLIST_ID = 'bal-fin-annee-2025';
+
+        // VOTRE CONFIGURATION FIREBASE ICI
+        // Ces valeurs proviennent de votre console Firebase -> Paramètres du projet -> Paramètres généraux -> Vos applications -> Web (</>) -> Extrait du SDK Firebase -> Config
+        const firebaseConfig = {
+            apiKey: "AIzaSyAxQs-ltOXETODS4YrjtIHa2vCOOqo6hls",
+            authDomain: "bal-de-fin-d-annee.firebaseapp.com",
+            projectId: "bal-de-fin-d-annee",
+            storageBucket: "bal-de-fin-d-annee.firebasestorage.app",
+            messagingSenderId: "847602809991",
+            appId: "1:847602809991:web:709232759d373084208c22",
+            // measurementId: "G-XTCPJT31VT" // Optionnel, non utilisé dans cette app
+        };
+
+        /**
+         * Définit le message à afficher à l'utilisateur et déclenche un re-rendu.
+         * @param {string} msg - Le message à afficher.
+         */
+        function setMessage(msg) {
+            currentMessage = msg;
+            renderApp();
+        }
+
+        /**
+         * Efface le message affiché à l'utilisateur et déclenche un re-rendu.
+         */
+        function clearMessage() {
+            currentMessage = '';
+            renderApp();
+        }
+
+        /**
+         * Met à jour l'interface utilisateur en fonction de l'état actuel de l'application.
+         * Cette fonction est appelée chaque fois que l'état change (par exemple, chargement, ajout de chanson, vote).
+         */
+        function renderApp() {
+            console.log('renderApp called. isAuthReady:', isAuthReady, 'userId:', userId, 'currentPlaylist:', currentPlaylist);
+            const appRoot = document.getElementById('app-root');
+            if (!appRoot) {
+                console.error('app-root element not found!');
+                return;
+            }
+
+            let contentHtml = '';
+
+            if (!isAuthReady) {
+                contentHtml = `
+                    <div class="flex items-center justify-center min-h-screen text-white">
+                        <div class="text-center p-8 bg-white bg-opacity-20 rounded-xl shadow-2xl backdrop-blur-sm">
+                            <p class="text-2xl font-bold animate-pulse">Chargement de l'application...</p>
+                            <p class="text-lg mt-2">Veuillez patienter.</p>
+                        </div>
+                    </div>
+                `;
+            } else {
+                contentHtml = `
+                    <h1 class="text-4xl sm:text-5xl font-extrabold text-white mb-6 text-center drop-shadow-lg">
+                        <span class="block">Playlist Collaborative</span>
+                        <span class="block text-2xl sm:text-3xl mt-2">pour votre bal de fin d'année !</span>
+                    </h1>
+
+                    <div class="w-full max-w-4xl bg-white rounded-xl shadow-2xl p-6 sm:p-8 mb-8">
+                        <div class="flex flex-col sm:flex-row justify-between items-center mb-6 space-y-4 sm:space-y-0 sm:space-x-4">
+                            <p class="text-lg font-semibold text-gray-700">
+                                Votre ID utilisateur: <span class="font-mono text-purple-600 break-all">${userId}</span>
+                            </p>
+                            <button
+                                id="sharePlaylistButton"
+                                class="bg-yellow-500 hover:bg-yellow-600 text-gray-800 font-bold py-2 px-4 rounded-lg shadow-md transition duration-300 ease-in-out transform hover:scale-105"
+                            >
+                                Partager la playlist
+                            </button>
+                        </div>
+
+                        ${currentMessage ? `
+                            <div class="bg-blue-100 border border-blue-400 text-blue-700 px-4 py-3 rounded relative mb-4" role="alert">
+                                <span class="block sm:inline">${currentMessage}</span>
+                                <span id="closeMessageButton" class="absolute top-0 bottom-0 right-0 px-4 py-3 cursor-pointer">
+                                    <svg class="fill-current h-6 w-6 text-blue-500" role="button" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><title>Close</title><path d="M14.348 14.849a1.2 1.2 0 0 1-1.697 0L10 11.819l-2.651 3.029a1.2 1.2 0 1 1-1.697-1.697l2.758-3.15-2.759-3.152a1.2 1.2 0 1 1 1.697-1.697L10 8.183l2.651-3.031a1.2 1.2 0 1 1 1.697 1.697l-2.758 3.152 2.758 3.15a1.2 1.2 0 0 1 0 1.698z"/></svg>
+                                </span>
+                            </div>
+                        ` : ''}
+
+                        <div>
+                            <h2 class="text-3xl font-bold text-gray-800 mb-4 text-center">
+                                Playlist: <span class="text-purple-600">${currentPlaylist?.name || 'Chargement...'}</span>
+                            </h2>
+
+                            <form id="addSongForm" class="mb-8 p-6 bg-gray-50 rounded-lg shadow-inner">
+                                <h3 class="text-2xl font-semibold text-gray-700 mb-4">Ajouter une nouvelle chanson</h3>
+                                <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+                                    <input
+                                        type="text"
+                                        placeholder="Titre de la chanson"
+                                        id="songTitleInput"
+                                        class="p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+                                        required
+                                    />
+                                    <input
+                                        type="text"
+                                        placeholder="Artiste"
+                                        id="songArtistInput"
+                                        class="p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+                                        required
+                                    />
+                                    <input
+                                        type="url"
+                                        placeholder="Lien de streaming (YouTube, Spotify, etc.)"
+                                        id="streamingLinkInput"
+                                        class="p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
+                                        required
+                                    />
+                                </div>
+                                <button
+                                    type="submit"
+                                    class="w-full bg-purple-600 hover:bg-purple-700 text-white font-bold py-3 px-6 rounded-lg shadow-lg transition duration-300 ease-in-out transform hover:scale-105"
+                                >
+                                    Ajouter la chanson
+                                </button>
+                            </form>
+
+                            <h3 class="text-2xl font-semibold text-gray-700 mb-4 text-center">Liste des chansons</h3>
+                            <ul id="songsList" class="space-y-4">
+                                ${currentPlaylist && currentPlaylist.songs && currentPlaylist.songs.length > 0 ?
+                                    currentPlaylist.songs.map(song => `
+                                        <li class="flex flex-col sm:flex-row items-center bg-white p-4 rounded-lg shadow-md border border-gray-200 hover:shadow-lg transition duration-200 ease-in-out">
+                                            <div class="flex-grow text-center sm:text-left mb-2 sm:mb-0">
+                                                <p class="text-xl font-bold text-gray-900">${song.title}</p>
+                                                <p class="text-md text-gray-600">par ${song.artist}</p>
+                                                <a
+                                                    href="${song.streamingLink}"
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    class="text-blue-500 hover:underline text-sm"
+                                                >
+                                                    Écouter
+                                                </a>
+                                            </div>
+                                            <div class="flex items-center space-x-3 mt-2 sm:mt-0">
+                                                <button
+                                                    data-song-id="${song.id}"
+                                                    data-vote-type="upvote"
+                                                    class="vote-button bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-3 rounded-full shadow-md transition duration-300 ease-in-out transform hover:scale-110"
+                                                    aria-label="Voter pour"
+                                                >
+                                                    👍
+                                                </button>
+                                                <span class="text-2xl font-bold text-gray-800">${song.votes}</span>
+                                                <button
+                                                    data-song-id="${song.id}"
+                                                    data-vote-type="downvote"
+                                                    class="vote-button bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-3 rounded-full shadow-md transition duration-300 ease-in-out transform hover:scale-110"
+                                                    aria-label="Retirer le vote"
+                                                >
+                                                    👎
+                                                </button>
+                                            </div>
+                                        </li>
+                                    `).join('')
+                                : `
+                                    <p class="text-center text-gray-600 italic">Aucune chanson dans cette playlist. Ajoutez-en une !</p>
+                                `}
+                            </ul>
+                        </div>
+                    </div>
+
+                    <div id="shareModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50 hidden">
+                        <div class="bg-white rounded-xl shadow-2xl p-6 sm:p-8 w-full max-w-md">
+                            <h3 class="text-2xl font-bold text-gray-800 mb-4">Partager cette playlist</h3>
+                            <p class="text-gray-700 mb-4">Copiez ce lien et partagez-le avec vos amis :</p>
+                            <div class="flex items-center border border-gray-300 rounded-lg p-2 mb-4 bg-gray-50">
+                                <input
+                                    type="text"
+                                    readOnly
+                                    value="${window.location.origin}?playlistId=${PLAYLIST_ID}"
+                                    class="flex-grow bg-transparent outline-none text-gray-700"
+                                />
+                                <button
+                                    id="copyShareLinkButton"
+                                    class="ml-2 bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded-lg transition duration-300 ease-in-out"
+                                >
+                                    Copier
+                                </button>
+                            </div>
+                            <div class="flex justify-end">
+                                <button
+                                    id="closeShareModalButton"
+                                    class="bg-gray-300 hover:bg-gray-400 text-gray-800 font-bold py-2 px-4 rounded-lg transition duration-300 ease-in-out"
+                                >
+                                    Fermer
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+            appRoot.innerHTML = contentHtml; // Injecte le HTML dans l'élément racine
+            attachEventListeners(); // Attache les écouteurs d'événements aux nouveaux éléments
+        }
+
+        /**
+         * Attache les écouteurs d'événements aux éléments DOM après chaque rendu.
+         */
+        function attachEventListeners() {
+            console.log('attachEventListeners called.');
+            // Écouteur pour le formulaire d'ajout de chanson
+            const addSongForm = document.getElementById('addSongForm');
+            if (addSongForm) {
+                addSongForm.onsubmit = addSong;
+            }
+
+            // Écouteurs pour les boutons de vote (👍 et 👎)
+            const voteButtons = document.querySelectorAll('.vote-button');
+            voteButtons.forEach(button => {
+                button.onclick = (event) => {
+                    const songId = event.currentTarget.dataset.songId;
+                    const voteType = event.currentTarget.dataset.voteType;
+                    const songToVote = currentPlaylist.songs.find(s => s.id === songId);
+                    if (songToVote) {
+                        handleVote(songToVote, voteType);
+                    }
+                };
+            });
+
+            // Écouteur pour le bouton de partage de playlist
+            const sharePlaylistButton = document.getElementById('sharePlaylistButton');
+            if (sharePlaylistButton) {
+                sharePlaylistButton.onclick = () => {
+                    const shareModal = document.getElementById('shareModal');
+                    if (shareModal) shareModal.classList.remove('hidden');
+                };
+            }
+
+            // Écouteur pour le bouton de copie du lien de partage
+            const copyShareLinkButton = document.getElementById('copyShareLinkButton');
+            if (copyShareLinkButton) {
+                copyShareLinkButton.onclick = copyShareLink;
+            }
+
+            // Écouteur pour le bouton de fermeture de la modale de partage
+            const closeShareModalButton = document.getElementById('closeShareModalButton');
+            if (closeShareModalButton) {
+                closeShareModalButton.onclick = () => {
+                    const shareModal = document.getElementById('shareModal');
+                    if (shareModal) shareModal.classList.add('hidden');
+                };
+            }
+
+            // Écouteur pour le bouton de fermeture du message d'alerte
+            const closeMessageButton = document.getElementById('closeMessageButton');
+            if (closeMessageButton) {
+                closeMessageButton.onclick = clearMessage;
+            }
+        }
+
+        /**
+         * Initialise Firebase (authentification et Firestore).
+         */
+        async function initializeFirebase() {
+            console.log('initializeFirebase called.');
+            try {
+                // Initialise l'application Firebase avec votre configuration
+                const app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+                console.log('Firebase app, db, and auth initialized.');
+
+                // L'appId de votre configuration Firebase sera utilisé pour le chemin Firestore
+                currentAppId = firebaseConfig.appId;
+
+                // Écoute les changements d'état d'authentification
+                onAuthStateChanged(auth, async (user) => {
+                    console.log('onAuthStateChanged triggered. User:', user);
+                    if (user) {
+                        userId = user.uid;
+                        isAuthReady = true;
+                        console.log('User signed in. userId:', userId, 'isAuthReady:', isAuthReady);
+                        startPlaylistListener();
+                    } else {
+                        // Si aucun utilisateur, tente de se connecter anonymement
+                        try {
+                            console.log('No user found, attempting anonymous sign-in...');
+                            await signInAnonymously(auth);
+                            console.log('Anonymous sign-in successful (or already signed in anonymously).');
+                        } catch (error) {
+                            console.error("Error signing in anonymously:", error);
+                            // Affiche l'erreur via setMessage
+                            setMessage("Erreur lors de la connexion anonyme : " + error.message);
+                            renderApp(); // Assure un re-rendu pour afficher le message
+                        }
+                    }
+                });
+            } catch (error) {
+                console.error("Failed to initialize Firebase:", error);
+                setMessage("Erreur lors de l'initialisation de l'application. Vérifiez votre configuration Firebase et votre connexion internet.");
+                renderApp();
+            }
+        }
+
+        /**
+         * Démarre l'écoute en temps réel des données de la playlist Firestore.
+         */
+        function startPlaylistListener() {
+            console.log('startPlaylistListener called. db:', db, 'isAuthReady:', isAuthReady);
+            if (!db || !isAuthReady) {
+                console.warn('Cannot start playlist listener: db or isAuthReady not set.');
+                return;
+            }
+
+            const playlistDocRef = doc(db, 'artifacts', currentAppId, 'public', 'data', 'playlists', PLAYLIST_ID);
+            console.log('Listening to playlist document:', playlistDocRef.path);
+
+            onSnapshot(playlistDocRef, (docSnap) => {
+                console.log('onSnapshot triggered. docSnap.exists:', docSnap.exists());
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    const sortedSongs = data.songs ? [...data.songs].sort((a, b) => b.votes - a.votes) : [];
+                    currentPlaylist = { id: docSnap.id, ...data, songs: sortedSongs };
+                    console.log('Playlist data updated:', currentPlaylist);
+                    renderApp();
+                } else {
+                    console.log('Playlist document does not exist, attempting to create initial playlist.');
+                    createInitialPlaylist();
+                }
+            }, (error) => {
+                console.error("Error fetching playlist:", error);
+                setMessage("Erreur lors du chargement de la playlist : " + error.message);
+                renderApp();
+            });
+        }
+
+        /**
+         * Crée la playlist initiale si elle n'existe pas.
+         */
+        async function createInitialPlaylist() {
+            console.log('createInitialPlaylist called. db:', db, 'userId:', userId);
+            if (!db || !userId) {
+                console.warn('Cannot create initial playlist: db or userId not set.');
+                return;
+            }
+
+            const playlistDocRef = doc(db, 'artifacts', currentAppId, 'public', 'data', 'playlists', PLAYLIST_ID);
+            const newPlaylistData = {
+                name: "Playlist du Bal de Fin d'Année",
+                createdAt: Date.now(),
+                createdBy: userId,
+                songs: []
+            };
+            try {
+                await setDoc(playlistDocRef, newPlaylistData);
+                setMessage("Playlist 'Bal de Fin d'Année' créée automatiquement !");
+                console.log('Initial playlist created successfully.');
+            } catch (error) {
+                console.error("Error creating initial playlist:", error);
+                setMessage("Erreur lors de la création de la playlist initiale : " + error.message);
+            }
+            renderApp();
+        }
+
+        /**
+         * Ajoute une nouvelle chanson à la playlist.
+         * @param {Event} e - L'événement de soumission du formulaire.
+         */
+        async function addSong(e) {
+            e.preventDefault();
+            console.log('addSong called.');
+            const songTitleInput = document.getElementById('songTitleInput');
+            const songArtistInput = document.getElementById('songArtistInput');
+            const streamingLinkInput = document.getElementById('streamingLinkInput');
+
+            const title = songTitleInput.value.trim();
+            const artist = songArtistInput.value.trim();
+            const link = streamingLinkInput.value.trim();
+
+            if (!db || !PLAYLIST_ID || !title || !artist || !link) {
+                setMessage("Veuillez remplir tous les champs de la chanson.");
+                renderApp();
+                return;
+            }
+
+            try {
+                const playlistDocRef = doc(db, 'artifacts', currentAppId, 'public', 'data', 'playlists', PLAYLIST_ID);
+                const newSong = {
+                    id: crypto.randomUUID(),
+                    title: title,
+                    artist: artist,
+                    streamingLink: link,
+                    votes: 0,
+                    addedBy: userId,
+                    voters: []
+                };
+
+                await updateDoc(playlistDocRef, {
+                    songs: arrayUnion(newSong)
+                });
+
+                setMessage(`Chanson "${title}" ajoutée !`);
+                songTitleInput.value = '';
+                songArtistInput.value = '';
+                streamingLinkInput.value = '';
+                renderApp();
+                console.log('Song added successfully.');
+            } catch (error) {
+                console.error("Error adding song:", error);
+                setMessage("Erreur lors de l'ajout de la chanson : " + error.message);
+                renderApp();
+            }
+        }
+
+        /**
+         * Gère les votes pour une chanson (upvote ou downvote).
+         * @param {Object} songToVote - L'objet chanson à voter.
+         * @param {string} type - Le type de vote ('upvote' ou 'downvote').
+         */
+        async function handleVote(songToVote, type) {
+            console.log('handleVote called for song:', songToVote.title, 'type:', type);
+            if (!db || !PLAYLIST_ID || !userId) {
+                setMessage("Impossible de voter. Veuillez vous connecter ou recharger la page.");
+                renderApp();
+                return;
+            }
+
+            const playlistDocRef = doc(db, 'artifacts', currentAppId, 'public', 'data', 'playlists', PLAYLIST_ID);
+            const currentSongs = currentPlaylist?.songs || [];
+            const songIndex = currentSongs.findIndex(s => s.id === songToVote.id);
+
+            if (songIndex === -1) {
+                setMessage("Chanson introuvable.");
+                renderApp();
+                return;
+            }
+
+            const song = { ...currentSongs[songIndex] };
+            const hasVoted = song.voters && song.voters.includes(userId);
+
+            if (type === 'upvote') {
+                if (!hasVoted) {
+                    song.votes += 1;
+                    song.voters = [...(song.voters || []), userId];
+                    setMessage(`Vous avez voté pour "${song.title}" !`);
+                } else {
+                    setMessage(`Vous avez déjà voté pour "${song.title}".`);
+                    renderApp();
+                    return;
+                }
+            } else if (type === 'downvote') {
+                if (hasVoted) {
+                    song.votes -= 1;
+                    song.voters = song.voters.filter(id => id !== userId);
+                    setMessage(`Votre vote pour "${song.title}" a été retiré.`);
+                } else {
+                    setMessage(`Vous n'avez pas voté pour "${song.title}".`);
+                    renderApp();
+                    return;
+                }
+            }
+
+            try {
+                await updateDoc(playlistDocRef, {
+                    songs: arrayRemove(songToVote)
+                });
+                await updateDoc(playlistDocRef, {
+                    songs: arrayUnion(song)
+                });
+                console.log('Vote updated successfully.');
+            } catch (error) {
+                console.error("Error updating vote:", error);
+                setMessage("Erreur lors de la mise à jour du vote : " + error.message);
+                renderApp();
+            }
+        }
+
+        /**
+         * Copie le lien de partage de la playlist dans le presse-papiers.
+         */
+        function copyShareLink() {
+            console.log('copyShareLink called.');
+            const shareLink = `${window.location.origin}?playlistId=${PLAYLIST_ID}`;
+            try {
+                const tempInput = document.createElement('textarea');
+                tempInput.value = shareLink;
+                document.body.appendChild(tempInput);
+                tempInput.select();
+                document.execCommand('copy');
+                document.body.removeChild(tempInput);
+                setMessage("Lien copié dans le presse-papiers !");
+            } catch (err) {
+                console.error('Failed to copy text: ', err);
+                setMessage("Impossible de copier le lien. Veuillez le copier manuellement.");
+            }
+            const shareModal = document.getElementById('shareModal');
+            if (shareModal) shareModal.classList.add('hidden');
+            renderApp();
+        }
+
+        // Lance l'initialisation de Firebase et le rendu initial de l'application une fois la page chargée
+        window.onload = initializeFirebase;
+    </script>
+</body>
+</html>
