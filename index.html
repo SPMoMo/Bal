@@ -11,6 +11,22 @@
         body {
             font-family: 'Inter', sans-serif;
         }
+        /* Styles pour les iframes des lecteurs */
+        .player-iframe-container {
+            position: relative;
+            width: 100%;
+            padding-bottom: 56.25%; /* Ratio 16:9 */
+            height: 0;
+            overflow: hidden;
+            border-radius: 0.5rem; /* rounded-lg */
+        }
+        .player-iframe-container iframe {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
     </style>
 </head>
 <body class="bg-gradient-to-br from-purple-400 via-pink-500 to-red-500 text-gray-800 p-4 sm:p-8 flex flex-col items-center min-h-screen">
@@ -22,21 +38,22 @@
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, doc, setDoc, updateDoc, onSnapshot, arrayUnion, arrayRemove } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getAnalytics } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-analytics.js"; // Import pour Analytics
 
         // Variables globales pour l'état de Firebase et de l'application
         let db; // Instance de Firestore
         let auth; // Instance d'authentification Firebase
+        let analytics; // Instance d'Analytics
         let userId = null; // ID de l'utilisateur actuel
         let isAuthReady = false; // Indique si l'authentification est prête
         let currentPlaylist = null; // Données de la playlist actuelle
-        let currentMessage = ''; // Message à afficher à l'utilisateur (renommé pour éviter conflit)
-        let currentAppId = 'default-app-id-for-github'; // ID d'application par défaut pour GitHub Pages
+        let currentMessage = ''; // Message à afficher à l'utilisateur
+        let currentAppId = 'default-app-id-for-github'; // ID d'application par défaut pour GitHub Pages (ou utilisez firebaseConfig.projectId)
 
         // ID fixe de la playlist pour cette application unique
         const PLAYLIST_ID = 'bal-fin-annee-2025';
 
         // VOTRE CONFIGURATION FIREBASE ICI
-        // Ces valeurs proviennent de votre console Firebase -> Paramètres du projet -> Paramètres généraux -> Vos applications -> Web (</>) -> Extrait du SDK Firebase -> Config
         const firebaseConfig = {
             apiKey: "AIzaSyAxQs-ltOXETODS4YrjtIHa2vCOOqo6hls",
             authDomain: "bal-de-fin-d-annee.firebaseapp.com",
@@ -44,7 +61,7 @@
             storageBucket: "bal-de-fin-d-annee.firebasestorage.app",
             messagingSenderId: "847602809991",
             appId: "1:847602809991:web:709232759d373084208c22",
-            // measurementId: "G-XTCPJT31VT" // Optionnel, non utilisé dans cette app
+            measurementId: "G-XTCPJT31VT" // Ajout du measurementId
         };
 
         /**
@@ -62,6 +79,38 @@
         function clearMessage() {
             currentMessage = '';
             renderApp();
+        }
+
+        /**
+         * Extrait l'ID d'une vidéo YouTube à partir de son URL.
+         * Prend en charge les formats courants de YouTube.
+         * @param {string} url - L'URL de la vidéo YouTube.
+         * @returns {string|null} L'ID de la vidéo YouTube ou null si non trouvée.
+         */
+        function extractYouTubeVideoId(url) {
+            let videoId = null;
+            const youtubeRegex = /(?:https?:\/\/)?(?:www\.)?(?:m\.)?(?:youtube\.com|youtu\.be)\/(?:watch\?v=|embed\/|v\/|)([\w-]{11})(?:\S+)?/i;
+            const match = url.match(youtubeRegex);
+            if (match && match[1]) {
+                videoId = match[1];
+            }
+            return videoId;
+        }
+
+        /**
+         * Extrait le permalien d'une piste SoundCloud à partir de son URL.
+         * @param {string} url - L'URL de la piste SoundCloud.
+         * @returns {string|null} Le permalien SoundCloud ou null si non trouvée.
+         */
+        function extractSoundCloudPermalink(url) {
+            // Regex pour matcher les URLs de pistes SoundCloud
+            const soundcloudRegex = /(?:https?:\/\/)?(?:www\.)?soundcloud\.com\/([\w-]+\/[\w-]+)(?:\S+)?/i;
+            const match = url.match(soundcloudRegex);
+            if (match && match[1]) {
+                // Reconstruit le permalien complet pour l'intégration
+                return `https://soundcloud.com/${match[1]}`;
+            }
+            return null;
         }
 
         /**
@@ -140,7 +189,7 @@
                                     />
                                     <input
                                         type="url"
-                                        placeholder="Lien de streaming (YouTube, Spotify, etc.)"
+                                        placeholder="Lien de streaming (YouTube, Spotify, SoundCloud, etc.)"
                                         id="streamingLinkInput"
                                         class="p-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500"
                                         required
@@ -162,14 +211,29 @@
                                             <div class="flex-grow text-center sm:text-left mb-2 sm:mb-0">
                                                 <p class="text-xl font-bold text-gray-900">${song.title}</p>
                                                 <p class="text-md text-gray-600">par ${song.artist}</p>
+                                                <div class="flex flex-wrap items-center gap-2 mt-1">
+                                                ${song.youtubeVideoId || song.soundCloudPermalink ? `
+                                                    <button class="play-song-button bg-blue-500 hover:bg-blue-600 text-white font-bold py-1 px-3 rounded-lg text-sm transition duration-300 ease-in-out"
+                                                        data-song-id="${song.id}"
+                                                        data-video-id="${song.youtubeVideoId || ''}"
+                                                        data-soundcloud-permalink="${song.soundCloudPermalink || ''}"
+                                                    >
+                                                        Écouter sur l'app
+                                                    </button>
+                                                ` : ''}
                                                 <a
                                                     href="${song.streamingLink}"
                                                     target="_blank"
                                                     rel="noopener noreferrer"
-                                                    class="text-blue-500 hover:underline text-sm"
+                                                    class="text-blue-500 hover:underline text-sm py-1 px-1"
                                                 >
-                                                    Écouter
+                                                    Écouter (lien externe)
                                                 </a>
+                                                </div>
+                                                <div id="player-container-${song.id}" class="mt-4 hidden w-full">
+                                                    <div class="player-iframe-container">
+                                                        </div>
+                                                </div>
                                             </div>
                                             <div class="flex items-center space-x-3 mt-2 sm:mt-0">
                                                 <button
@@ -189,6 +253,15 @@
                                                 >
                                                     👎
                                                 </button>
+                                                ${song.addedBy === userId ? `
+                                                    <button
+                                                        data-song-id="${song.id}"
+                                                        class="delete-song-button bg-red-700 hover:bg-red-800 text-white font-bold py-2 px-3 rounded-full shadow-md transition duration-300 ease-in-out transform hover:scale-110 ml-2"
+                                                        aria-label="Supprimer la chanson"
+                                                    >
+                                                        🗑️
+                                                    </button>
+                                                ` : ''}
                                             </div>
                                         </li>
                                     `).join('')
@@ -229,8 +302,8 @@
                     </div>
                 `;
             }
-            appRoot.innerHTML = contentHtml; // Injecte le HTML dans l'élément racine
-            attachEventListeners(); // Attache les écouteurs d'événements aux nouveaux éléments
+            appRoot.innerHTML = contentHtml;
+            attachEventListeners();
         }
 
         /**
@@ -238,13 +311,11 @@
          */
         function attachEventListeners() {
             console.log('attachEventListeners called.');
-            // Écouteur pour le formulaire d'ajout de chanson
             const addSongForm = document.getElementById('addSongForm');
             if (addSongForm) {
                 addSongForm.onsubmit = addSong;
             }
 
-            // Écouteurs pour les boutons de vote (👍 et 👎)
             const voteButtons = document.querySelectorAll('.vote-button');
             voteButtons.forEach(button => {
                 button.onclick = (event) => {
@@ -257,7 +328,19 @@
                 };
             });
 
-            // Écouteur pour le bouton de partage de playlist
+            // NOUVEAU : Écouteurs pour les boutons "Supprimer"
+            const deleteSongButtons = document.querySelectorAll('.delete-song-button');
+            deleteSongButtons.forEach(button => {
+                button.onclick = (event) => {
+                    const songId = event.currentTarget.dataset.songId;
+                    const songToDelete = currentPlaylist.songs.find(s => s.id === songId);
+                    if (songToDelete) {
+                        deleteSong(songToDelete);
+                    }
+                };
+            });
+
+
             const sharePlaylistButton = document.getElementById('sharePlaylistButton');
             if (sharePlaylistButton) {
                 sharePlaylistButton.onclick = () => {
@@ -266,13 +349,11 @@
                 };
             }
 
-            // Écouteur pour le bouton de copie du lien de partage
             const copyShareLinkButton = document.getElementById('copyShareLinkButton');
             if (copyShareLinkButton) {
                 copyShareLinkButton.onclick = copyShareLink;
             }
 
-            // Écouteur pour le bouton de fermeture de la modale de partage
             const closeShareModalButton = document.getElementById('closeShareModalButton');
             if (closeShareModalButton) {
                 closeShareModalButton.onclick = () => {
@@ -281,11 +362,53 @@
                 };
             }
 
-            // Écouteur pour le bouton de fermeture du message d'alerte
             const closeMessageButton = document.getElementById('closeMessageButton');
             if (closeMessageButton) {
                 closeMessageButton.onclick = clearMessage;
             }
+
+            // NOUVEAU : Écouteurs pour les boutons "Écouter sur l'app"
+            const playSongButtons = document.querySelectorAll('.play-song-button');
+            playSongButtons.forEach(button => {
+                button.onclick = (event) => {
+                    const videoId = event.currentTarget.dataset.videoId;
+                    const soundcloudPermalink = event.currentTarget.dataset.soundcloudPermalink;
+                    const songId = event.currentTarget.dataset.songId;
+                    const playerContainer = document.getElementById(`player-container-${songId}`);
+                    const iframeContainer = playerContainer ? playerContainer.querySelector('.player-iframe-container') : null;
+
+                    if (playerContainer && iframeContainer) {
+                        if (playerContainer.classList.contains('hidden')) {
+                            // Afficher le lecteur
+                            let iframeSrc = '';
+                            if (videoId) {
+                                // URL d'intégration YouTube standard
+                                iframeSrc = `https://www.youtube.com/embed/${videoId}?autoplay=1`;
+                            } else if (soundcloudPermalink) {
+                                // SoundCloud embed widget URL
+                                iframeSrc = `https://w.soundcloud.com/player/?url=${encodeURIComponent(soundcloudPermalink)}&auto_play=true&hide_related=true&show_comments=false&show_user=false&show_reposts=false&visual=true`;
+                            }
+
+                            if (iframeSrc) {
+                                iframeContainer.innerHTML = `
+                                    <iframe src="${iframeSrc}"
+                                    frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                                    allowfullscreen></iframe>
+                                `;
+                                playerContainer.classList.remove('hidden');
+                                event.currentTarget.textContent = 'Masquer le lecteur';
+                            } else {
+                                setMessage("Impossible de lire cette musique directement. Le format n'est pas pris en charge.");
+                            }
+                        } else {
+                            // Masquer le lecteur
+                            iframeContainer.innerHTML = ''; // Vide l'iframe
+                            playerContainer.classList.add('hidden');
+                            event.currentTarget.textContent = 'Écouter sur l\'app';
+                        }
+                    }
+                };
+            });
         }
 
         /**
@@ -294,16 +417,14 @@
         async function initializeFirebase() {
             console.log('initializeFirebase called.');
             try {
-                // Initialise l'application Firebase avec votre configuration
                 const app = initializeApp(firebaseConfig);
                 db = getFirestore(app);
                 auth = getAuth(app);
-                console.log('Firebase app, db, and auth initialized.');
+                analytics = getAnalytics(app); // Initialisation de Google Analytics
+                console.log('Firebase app, db, auth, and analytics initialized.');
 
-                // L'appId de votre configuration Firebase sera utilisé pour le chemin Firestore
                 currentAppId = firebaseConfig.appId;
 
-                // Écoute les changements d'état d'authentification
                 onAuthStateChanged(auth, async (user) => {
                     console.log('onAuthStateChanged triggered. User:', user);
                     if (user) {
@@ -312,16 +433,14 @@
                         console.log('User signed in. userId:', userId, 'isAuthReady:', isAuthReady);
                         startPlaylistListener();
                     } else {
-                        // Si aucun utilisateur, tente de se connecter anonymement
                         try {
                             console.log('No user found, attempting anonymous sign-in...');
                             await signInAnonymously(auth);
                             console.log('Anonymous sign-in successful (or already signed in anonymously).');
                         } catch (error) {
                             console.error("Error signing in anonymously:", error);
-                            // Affiche l'erreur via setMessage
                             setMessage("Erreur lors de la connexion anonyme : " + error.message);
-                            renderApp(); // Assure un re-rendu pour afficher le message
+                            renderApp();
                         }
                     }
                 });
@@ -413,6 +532,21 @@
                 return;
             }
 
+            // NOUVEAU : Vérifier si la chanson existe déjà dans la playlist
+            const existingSong = currentPlaylist?.songs.find(s =>
+                s.title.toLowerCase() === title.toLowerCase() &&
+                s.artist.toLowerCase() === artist.toLowerCase()
+            );
+
+            if (existingSong) {
+                setMessage(`La chanson "${title}" par "${artist}" existe déjà dans la playlist.`);
+                renderApp();
+                return; // Empêche l'ajout de la chanson en double
+            }
+
+            const youtubeVideoId = extractYouTubeVideoId(link);
+            const soundCloudPermalink = extractSoundCloudPermalink(link);
+
             try {
                 const playlistDocRef = doc(db, 'artifacts', currentAppId, 'public', 'data', 'playlists', PLAYLIST_ID);
                 const newSong = {
@@ -420,8 +554,10 @@
                     title: title,
                     artist: artist,
                     streamingLink: link,
+                    youtubeVideoId: youtubeVideoId,
+                    soundCloudPermalink: soundCloudPermalink, // Stocke le permalien SoundCloud
                     votes: 0,
-                    addedBy: userId,
+                    addedBy: userId, // Stocke l'ID de l'utilisateur qui a ajouté la chanson
                     voters: []
                 };
 
@@ -506,11 +642,46 @@
         }
 
         /**
+         * Supprime une chanson de la playlist.
+         * @param {Object} songToDelete - L'objet chanson à supprimer.
+         */
+        async function deleteSong(songToDelete) {
+            console.log('deleteSong called for song:', songToDelete.title);
+            if (!db || !PLAYLIST_ID || !userId) {
+                setMessage("Impossible de supprimer. Veuillez vous connecter ou recharger la page.");
+                renderApp();
+                return;
+            }
+
+            // Vérifie si l'utilisateur actuel est celui qui a ajouté la chanson
+            if (songToDelete.addedBy !== userId) {
+                setMessage("Vous ne pouvez supprimer que les chansons que vous avez ajoutées.");
+                renderApp();
+                return;
+            }
+
+            const playlistDocRef = doc(db, 'artifacts', currentAppId, 'public', 'data', 'playlists', PLAYLIST_ID);
+
+            try {
+                // Utilise arrayRemove pour retirer la chanson de l'array 'songs'
+                await updateDoc(playlistDocRef, {
+                    songs: arrayRemove(songToDelete)
+                });
+                setMessage(`Chanson "${songToDelete.title}" supprimée !`);
+                console.log('Song deleted successfully.');
+            } catch (error) {
+                console.error("Error deleting song:", error);
+                setMessage("Erreur lors de la suppression de la chanson : " + error.message);
+            }
+            renderApp();
+        }
+
+        /**
          * Copie le lien de partage de la playlist dans le presse-papiers.
          */
         function copyShareLink() {
             console.log('copyShareLink called.');
-            const shareLink = `https://spmomo.github.io/Bal/`;
+            const shareLink = `${window.location.origin}?playlistId=${PLAYLIST_ID}`;
             try {
                 const tempInput = document.createElement('textarea');
                 tempInput.value = shareLink;
@@ -528,7 +699,6 @@
             renderApp();
         }
 
-        // Lance l'initialisation de Firebase et le rendu initial de l'application une fois la page chargée
         window.onload = initializeFirebase;
     </script>
 </body>
