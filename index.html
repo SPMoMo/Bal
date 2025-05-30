@@ -280,7 +280,7 @@
                                 <input
                                     type="text"
                                     readOnly
-                                    value="https://spmomo.github.io/Bal/"
+                                    value="https://spmomo.github.io/bal/"
                                     class="flex-grow bg-transparent outline-none text-gray-700"
                                 />
                                 <button
@@ -681,7 +681,8 @@
          */
         function copyShareLink() {
             console.log('copyShareLink called.');
-            const shareLink = `${window.location.origin}?playlistId=${PLAYLIST_ID}`;
+            // Le lien de partage est maintenant fixe
+            const shareLink = "https://spmomo.github.io/bal/";
             try {
                 const tempInput = document.createElement('textarea');
                 tempInput.value = shareLink;
