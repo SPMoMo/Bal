@@ -37,7 +37,8 @@
         // Import des modules Firebase depuis les CDN
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, setDoc, updateDoc, onSnapshot, arrayUnion, arrayRemove, getDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        // NOUVEAU : Ajout de collection, query, getDocs, where
+        import { getFirestore, doc, setDoc, updateDoc, onSnapshot, arrayUnion, arrayRemove, getDoc, collection, query, where, getDocs } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         import { getAnalytics } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-analytics.js"; // Import pour Analytics
 
         // Variables globales pour l'état de Firebase et de l'application
@@ -147,7 +148,7 @@
                     <div class="w-full max-w-4xl bg-white rounded-xl shadow-2xl p-6 sm:p-8 mb-8">
                         <div class="flex flex-col sm:flex-row justify-between items-center mb-6 space-y-4 sm:space-y-0 sm:space-x-4">
                             <p class="text-lg font-semibold text-gray-700">
-                                Votre ID utilisateur: <span class="font-mono text-purple-600 break-all">${userId}</span>
+                                Bonjour, <span class="font-bold text-purple-600">${userDisplayName || 'Invité'}</span>!
                             </p>
                             <div class="flex flex-col sm:flex-row items-center gap-2">
                                 <input
@@ -155,6 +156,7 @@
                                     id="displayNameInput"
                                     placeholder="Votre pseudo"
                                     value="${userDisplayName || ''}"
+                                    maxlength="20"
                                     class="p-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 text-sm w-full sm:w-auto"
                                 />
                                 <button
@@ -383,13 +385,11 @@
                 closeMessageButton.onclick = clearMessage;
             }
 
-            // NOUVEAU : Écouteur pour le bouton "Définir mon pseudo"
             const setDisplayNameButton = document.getElementById('setDisplayNameButton');
             if (setDisplayNameButton) {
                 setDisplayNameButton.onclick = setDisplayName;
             }
 
-            // NOUVEAU : Écouteurs pour les boutons "Écouter sur l'app"
             const playSongButtons = document.querySelectorAll('.play-song-button');
             playSongButtons.forEach(button => {
                 button.onclick = (event) => {
@@ -451,8 +451,7 @@
                     console.log('onAuthStateChanged triggered. User:', user);
                     if (user) {
                         userId = user.uid;
-                        // NOUVEAU : Tente de charger le pseudo de l'utilisateur
-                        await loadUserDisplayName(userId);
+                        await loadUserDisplayName(userId); // Charge le pseudo
                         isAuthReady = true;
                         console.log('User signed in. userId:', userId, 'userDisplayName:', userDisplayName, 'isAuthReady:', isAuthReady);
                         startPlaylistListener();
@@ -515,14 +514,46 @@
                 return;
             }
 
-            const userProfileRef = doc(db, 'artifacts', currentAppId, 'public', 'data', 'userProfiles', userId);
+            if (newDisplayName.length > 20) {
+                setMessage("Le pseudo ne peut pas dépasser 20 caractères.");
+                renderApp();
+                return;
+            }
+
+            // 1. Vérifier si le pseudo est déjà pris par un autre utilisateur
+            const userProfilesRef = collection(db, 'artifacts', currentAppId, 'public', 'data', 'userProfiles');
             try {
-                await setDoc(userProfileRef, { displayName: newDisplayName }, { merge: true });
+                const q = query(userProfilesRef, where('displayName', '==', newDisplayName));
+                const querySnapshot = await getDocs(q);
+
+                let isTakenByOtherUser = false;
+                querySnapshot.forEach(doc => {
+                    if (doc.id !== userId) { // Le pseudo est pris par quelqu'un d'autre que l'utilisateur actuel
+                        isTakenByOtherUser = true;
+                    }
+                });
+
+                if (isTakenByOtherUser) {
+                    setMessage(`Désolé, le pseudo "${newDisplayName}" est déjà pris. Veuillez en choisir un autre.`);
+                    renderApp();
+                    return;
+                }
+            } catch (error) {
+                console.error("Erreur lors de la vérification de la disponibilité du pseudo:", error);
+                setMessage("Erreur lors de la vérification du pseudo. Vérifiez votre connexion et les index Firestore.");
+                renderApp();
+                return;
+            }
+
+            // Si le pseudo n'est pas pris, procéder à la mise à jour
+            const userProfileDocRef = doc(db, 'artifacts', currentAppId, 'public', 'data', 'userProfiles', userId);
+            try {
+                await setDoc(userProfileDocRef, { displayName: newDisplayName }, { merge: true });
                 userDisplayName = newDisplayName; // Met à jour la variable globale
                 setMessage(`Votre pseudo a été défini sur "${newDisplayName}" !`);
                 console.log('Display name set:', newDisplayName);
             } catch (error) {
-                console.error("Error setting display name:", error);
+                console.error("Erreur lors de la définition du pseudo:", error);
                 setMessage("Erreur lors de la définition du pseudo : " + error.message);
             }
             renderApp();
@@ -634,8 +665,8 @@
                     youtubeVideoId: youtubeVideoId,
                     soundCloudPermalink: soundCloudPermalink,
                     votes: 0,
-                    addedBy: userId, // L'ID Firebase unique de l'utilisateur
-                    addedByDisplayName: userDisplayName || userId, // Le pseudo ou l'ID Firebase pour l'affichage
+                    addedBy: userId, // L'ID Firebase unique de l'utilisateur (pour les permissions)
+                    addedByDisplayName: userDisplayName || 'Invité', // Le pseudo ou 'Invité' pour l'affichage
                     voters: []
                 };
 
