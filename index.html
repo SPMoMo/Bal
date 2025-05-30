@@ -37,7 +37,7 @@
         // Import des modules Firebase depuis les CDN
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, setDoc, updateDoc, onSnapshot, arrayUnion, arrayRemove } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getFirestore, doc, setDoc, updateDoc, onSnapshot, arrayUnion, arrayRemove, getDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
         import { getAnalytics } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-analytics.js"; // Import pour Analytics
 
         // Variables globales pour l'état de Firebase et de l'application
@@ -45,6 +45,7 @@
         let auth; // Instance d'authentification Firebase
         let analytics; // Instance d'Analytics
         let userId = null; // ID de l'utilisateur actuel
+        let userDisplayName = null; // Pseudo de l'utilisateur actuel
         let isAuthReady = false; // Indique si l'authentification est prête
         let currentPlaylist = null; // Données de la playlist actuelle
         let currentMessage = ''; // Message à afficher à l'utilisateur
@@ -118,7 +119,7 @@
          * Cette fonction est appelée chaque fois que l'état change (par exemple, chargement, ajout de chanson, vote).
          */
         function renderApp() {
-            console.log('renderApp called. isAuthReady:', isAuthReady, 'userId:', userId, 'currentPlaylist:', currentPlaylist);
+            console.log('renderApp called. isAuthReady:', isAuthReady, 'userId:', userId, 'userDisplayName:', userDisplayName, 'currentPlaylist:', currentPlaylist);
             const appRoot = document.getElementById('app-root');
             if (!appRoot) {
                 console.error('app-root element not found!');
@@ -148,6 +149,21 @@
                             <p class="text-lg font-semibold text-gray-700">
                                 Votre ID utilisateur: <span class="font-mono text-purple-600 break-all">${userId}</span>
                             </p>
+                            <div class="flex flex-col sm:flex-row items-center gap-2">
+                                <input
+                                    type="text"
+                                    id="displayNameInput"
+                                    placeholder="Votre pseudo"
+                                    value="${userDisplayName || ''}"
+                                    class="p-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-purple-500 text-sm w-full sm:w-auto"
+                                />
+                                <button
+                                    id="setDisplayNameButton"
+                                    class="bg-purple-500 hover:bg-purple-600 text-white font-bold py-2 px-4 rounded-lg shadow-md transition duration-300 ease-in-out transform hover:scale-105 text-sm w-full sm:w-auto"
+                                >
+                                    Définir mon pseudo
+                                </button>
+                            </div>
                             <button
                                 id="sharePlaylistButton"
                                 class="bg-yellow-500 hover:bg-yellow-600 text-gray-800 font-bold py-2 px-4 rounded-lg shadow-md transition duration-300 ease-in-out transform hover:scale-105"
@@ -211,6 +227,7 @@
                                             <div class="flex-grow text-center sm:text-left mb-2 sm:mb-0">
                                                 <p class="text-xl font-bold text-gray-900">${song.title}</p>
                                                 <p class="text-md text-gray-600">par ${song.artist}</p>
+                                                <p class="text-xs text-gray-500 mt-1">Ajoutée par: ${song.addedByDisplayName || song.addedBy}</p>
                                                 <div class="flex flex-wrap items-center gap-2 mt-1">
                                                 ${song.youtubeVideoId || song.soundCloudPermalink ? `
                                                     <button class="play-song-button bg-blue-500 hover:bg-blue-600 text-white font-bold py-1 px-3 rounded-lg text-sm transition duration-300 ease-in-out"
@@ -328,7 +345,6 @@
                 };
             });
 
-            // NOUVEAU : Écouteurs pour les boutons "Supprimer"
             const deleteSongButtons = document.querySelectorAll('.delete-song-button');
             deleteSongButtons.forEach(button => {
                 button.onclick = (event) => {
@@ -365,6 +381,12 @@
             const closeMessageButton = document.getElementById('closeMessageButton');
             if (closeMessageButton) {
                 closeMessageButton.onclick = clearMessage;
+            }
+
+            // NOUVEAU : Écouteur pour le bouton "Définir mon pseudo"
+            const setDisplayNameButton = document.getElementById('setDisplayNameButton');
+            if (setDisplayNameButton) {
+                setDisplayNameButton.onclick = setDisplayName;
             }
 
             // NOUVEAU : Écouteurs pour les boutons "Écouter sur l'app"
@@ -429,8 +451,10 @@
                     console.log('onAuthStateChanged triggered. User:', user);
                     if (user) {
                         userId = user.uid;
+                        // NOUVEAU : Tente de charger le pseudo de l'utilisateur
+                        await loadUserDisplayName(userId);
                         isAuthReady = true;
-                        console.log('User signed in. userId:', userId, 'isAuthReady:', isAuthReady);
+                        console.log('User signed in. userId:', userId, 'userDisplayName:', userDisplayName, 'isAuthReady:', isAuthReady);
                         startPlaylistListener();
                     } else {
                         try {
@@ -449,6 +473,59 @@
                 setMessage("Erreur lors de l'initialisation de l'application. Vérifiez votre configuration Firebase et votre connexion internet.");
                 renderApp();
             }
+        }
+
+        /**
+         * Charge le pseudo de l'utilisateur depuis Firestore.
+         * @param {string} uid - L'ID de l'utilisateur.
+         */
+        async function loadUserDisplayName(uid) {
+            if (!db) return;
+            const userProfileRef = doc(db, 'artifacts', currentAppId, 'public', 'data', 'userProfiles', uid);
+            try {
+                const docSnap = await getDoc(userProfileRef);
+                if (docSnap.exists()) {
+                    userDisplayName = docSnap.data().displayName;
+                    console.log('User display name loaded:', userDisplayName);
+                } else {
+                    userDisplayName = null; // Pas de pseudo défini
+                    console.log('No display name found for user:', uid);
+                }
+            } catch (error) {
+                console.error("Error loading user display name:", error);
+                userDisplayName = null;
+            }
+        }
+
+        /**
+         * Définit ou met à jour le pseudo de l'utilisateur dans Firestore.
+         */
+        async function setDisplayName() {
+            if (!db || !userId) {
+                setMessage("Veuillez vous connecter pour définir un pseudo.");
+                renderApp();
+                return;
+            }
+            const displayNameInput = document.getElementById('displayNameInput');
+            const newDisplayName = displayNameInput.value.trim();
+
+            if (newDisplayName === '') {
+                setMessage("Le pseudo ne peut pas être vide.");
+                renderApp();
+                return;
+            }
+
+            const userProfileRef = doc(db, 'artifacts', currentAppId, 'public', 'data', 'userProfiles', userId);
+            try {
+                await setDoc(userProfileRef, { displayName: newDisplayName }, { merge: true });
+                userDisplayName = newDisplayName; // Met à jour la variable globale
+                setMessage(`Votre pseudo a été défini sur "${newDisplayName}" !`);
+                console.log('Display name set:', newDisplayName);
+            } catch (error) {
+                console.error("Error setting display name:", error);
+                setMessage("Erreur lors de la définition du pseudo : " + error.message);
+            }
+            renderApp();
         }
 
         /**
@@ -532,7 +609,7 @@
                 return;
             }
 
-            // NOUVEAU : Vérifier si la chanson existe déjà dans la playlist
+            // Vérifier si la chanson existe déjà dans la playlist (titre et artiste)
             const existingSong = currentPlaylist?.songs.find(s =>
                 s.title.toLowerCase() === title.toLowerCase() &&
                 s.artist.toLowerCase() === artist.toLowerCase()
@@ -541,7 +618,7 @@
             if (existingSong) {
                 setMessage(`La chanson "${title}" par "${artist}" existe déjà dans la playlist.`);
                 renderApp();
-                return; // Empêche l'ajout de la chanson en double
+                return;
             }
 
             const youtubeVideoId = extractYouTubeVideoId(link);
@@ -555,9 +632,10 @@
                     artist: artist,
                     streamingLink: link,
                     youtubeVideoId: youtubeVideoId,
-                    soundCloudPermalink: soundCloudPermalink, // Stocke le permalien SoundCloud
+                    soundCloudPermalink: soundCloudPermalink,
                     votes: 0,
-                    addedBy: userId, // Stocke l'ID de l'utilisateur qui a ajouté la chanson
+                    addedBy: userId, // L'ID Firebase unique de l'utilisateur
+                    addedByDisplayName: userDisplayName || userId, // Le pseudo ou l'ID Firebase pour l'affichage
                     voters: []
                 };
 
